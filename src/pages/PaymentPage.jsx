@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowUp, Loader2 } from 'lucide-react';
 import { stripePromise } from '../utils/stripe';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import { API_BASE_URL } from '../utils/config';
 
 const products = {
   1: {
@@ -46,66 +45,78 @@ const PaymentPage = () => {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
+  const makeRequest = async (url, options, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const response = await fetch(url, options);
+        const data = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(data.error || data.details || `Request failed with status ${response.status}`);
+        }
+        
+        return { response, data };
+      } catch (error) {
+        console.error(`Attempt ${i + 1} failed:`, error);
+        if (i === retries - 1) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+      }
+    }
+  };
+
   const handlePayment = async () => {
     try {
       setLoading(true);
       setError(null);
       
       // 1. Check server health
-      const healthCheck = await fetch(`${API_BASE_URL}/api/health`);
-      if (!healthCheck.ok) {
-        throw new Error('Payment server is not available. Please try again later.');
-      }
-      console.log('Server health check passed');
+      console.log('Checking server health...');
+      const { data: healthData } = await makeRequest(`${API_BASE_URL}/api/health`);
+      console.log('Server health check passed:', healthData);
 
       // 2. Get Stripe instance
+      console.log('Initializing Stripe...');
       const stripe = await stripePromise;
       if (!stripe) throw new Error('Stripe failed to initialize');
       console.log('Stripe initialized successfully');
 
       // Get the current origin for absolute URLs
       const origin = window.location.origin;
+      console.log('Using origin:', origin);
 
       // 3. Create checkout session
-      console.log('Creating checkout session with product:', {
-        name: product.name,
-        price: product.price,
-        description: product.description,
-        image: product.image,
+      const sessionData = {
+        productName: product.name,
+        productPrice: product.price,
+        productDescription: product.description,
+        productImage: product.image,
         successUrl: `${origin}/success`,
         cancelUrl: `${origin}/cancel`
-      });
-
-      const response = await fetch(`${API_BASE_URL}/api/create-checkout-session`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          productName: product.name,
-          productPrice: product.price,
-          productDescription: product.description,
-          productImage: product.image,
-          successUrl: `${origin}/success`,
-          cancelUrl: `${origin}/cancel`
-        }),
-      });
-
-      const data = await response.json();
+      };
       
-      if (!response.ok) {
-        throw new Error(data.error || data.details || 'Failed to create checkout session');
-      }
+      console.log('Creating checkout session with:', sessionData);
+      
+      const { data: checkoutData } = await makeRequest(
+        `${API_BASE_URL}/api/create-checkout-session`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(sessionData),
+        }
+      );
 
-      if (!data.sessionId) {
+      if (!checkoutData.sessionId) {
         throw new Error('No session ID received from server');
       }
 
-      console.log('Session created successfully:', data.sessionId);
+      console.log('Session created successfully:', checkoutData.sessionId);
 
       // 4. Redirect to checkout
+      console.log('Redirecting to checkout...');
       const { error: redirectError } = await stripe.redirectToCheckout({
-        sessionId: data.sessionId,
+        sessionId: checkoutData.sessionId,
       });
 
       if (redirectError) {
