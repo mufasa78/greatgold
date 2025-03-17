@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowUp } from 'lucide-react';
+import { ArrowLeft, ArrowUp, Loader2 } from 'lucide-react';
 import { stripePromise } from '../utils/stripe';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -33,6 +33,7 @@ const PaymentPage = () => {
   const { productId } = useParams();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const product = products[Number(productId)];
 
@@ -48,19 +49,34 @@ const PaymentPage = () => {
   const handlePayment = async () => {
     try {
       setLoading(true);
+      setError(null);
       
       // 1. Check server health
-      const healthCheck = await fetch(`${API_BASE_URL}/health`).catch(() => null);
-      if (!healthCheck?.ok) {
+      const healthCheck = await fetch(`${API_BASE_URL}/api/health`);
+      if (!healthCheck.ok) {
         throw new Error('Payment server is not available. Please try again later.');
       }
+      console.log('Server health check passed');
 
       // 2. Get Stripe instance
       const stripe = await stripePromise;
       if (!stripe) throw new Error('Stripe failed to initialize');
+      console.log('Stripe initialized successfully');
+
+      // Get the current origin for absolute URLs
+      const origin = window.location.origin;
 
       // 3. Create checkout session
-      const response = await fetch(`${API_BASE_URL}/create-checkout-session`, {
+      console.log('Creating checkout session with product:', {
+        name: product.name,
+        price: product.price,
+        description: product.description,
+        image: product.image,
+        successUrl: `${origin}/success`,
+        cancelUrl: `${origin}/cancel`
+      });
+
+      const response = await fetch(`${API_BASE_URL}/api/create-checkout-session`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -69,28 +85,35 @@ const PaymentPage = () => {
           productName: product.name,
           productPrice: product.price,
           productDescription: product.description,
-          productImage: product.image
+          productImage: product.image,
+          successUrl: `${origin}/success`,
+          cancelUrl: `${origin}/cancel`
         }),
       });
 
+      const data = await response.json();
+      
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(errorData || 'Failed to create checkout session');
+        throw new Error(data.error || data.details || 'Failed to create checkout session');
       }
 
-      const { sessionId } = await response.json();
+      if (!data.sessionId) {
+        throw new Error('No session ID received from server');
+      }
+
+      console.log('Session created successfully:', data.sessionId);
 
       // 4. Redirect to checkout
-      const { error } = await stripe.redirectToCheckout({
-        sessionId,
+      const { error: redirectError } = await stripe.redirectToCheckout({
+        sessionId: data.sessionId,
       });
 
-      if (error) {
-        throw new Error(error.message);
+      if (redirectError) {
+        throw new Error(`Redirect failed: ${redirectError.message}`);
       }
     } catch (error) {
       console.error('Payment error:', error);
-      alert('Payment failed: ' + error.message);
+      setError(error.message || 'An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -154,8 +177,20 @@ const PaymentPage = () => {
                   ${loading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#854836]'} 
                   transition-colors duration-300`}
               >
-                {loading ? 'Processing...' : 'Proceed to Payment'}
+                {loading ? (
+                  <span className="flex items-center justify-center">
+                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                    Processing...
+                  </span>
+                ) : (
+                  'Proceed to Payment'
+                )}
               </button>
+              {error && (
+                <p className="mt-4 text-sm text-red-600 text-center">
+                  {error}
+                </p>
+              )}
               <p className="mt-4 text-sm text-gray-500 text-center">
                 Secure payment powered by Stripe
               </p>
