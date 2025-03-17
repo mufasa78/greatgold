@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { loadStripe } from '@stripe/stripe-js';
 import { ArrowLeft, ArrowUp } from 'lucide-react';
+import { stripePromise } from '../utils/stripe';
 
-// This would normally come from an environment variable
-const STRIPE_PUBLIC_KEY = 'pk_test_your_key';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 const products = {
   1: {
@@ -47,14 +46,54 @@ const PaymentPage = () => {
   }, []);
 
   const handlePayment = async () => {
-    setLoading(true);
-    
-    // In a real application, you would:
-    // 1. Call your backend to create a Stripe session
-    // 2. Redirect to Stripe Checkout
-    // For demo purposes, we'll just show an alert
-    alert('In a production environment, this would redirect to Stripe Checkout');
-    setLoading(false);
+    try {
+      setLoading(true);
+      
+      // 1. Check server health
+      const healthCheck = await fetch(`${API_BASE_URL}/health`).catch(() => null);
+      if (!healthCheck?.ok) {
+        throw new Error('Payment server is not available. Please try again later.');
+      }
+
+      // 2. Get Stripe instance
+      const stripe = await stripePromise;
+      if (!stripe) throw new Error('Stripe failed to initialize');
+
+      // 3. Create checkout session
+      const response = await fetch(`${API_BASE_URL}/create-checkout-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          productName: product.name,
+          productPrice: product.price,
+          productDescription: product.description,
+          productImage: product.image
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(errorData || 'Failed to create checkout session');
+      }
+
+      const { sessionId } = await response.json();
+
+      // 4. Redirect to checkout
+      const { error } = await stripe.redirectToCheckout({
+        sessionId,
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+    } catch (error) {
+      console.error('Payment error:', error);
+      alert('Payment failed: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleBack = () => {
@@ -77,13 +116,13 @@ const PaymentPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#F7F7F7]">
       {/* Back Button */}
       <div className="bg-white shadow-sm">
         <div className="max-w-4xl mx-auto px-4 py-4">
           <button
             onClick={handleBack}
-            className="group flex items-center space-x-2 text-gray-600 hover:text-yellow-500 transition-all duration-300"
+            className="group flex items-center space-x-2 text-[#854836] hover:text-[#FFB22C] transition-all duration-300"
           >
             <ArrowLeft className="w-5 h-5 transform group-hover:-translate-x-1 transition-transform duration-300" />
             <span className="font-semibold">Back to Products</span>
@@ -103,17 +142,17 @@ const PaymentPage = () => {
               />
             </div>
             <div className="p-8 md:w-1/2">
-              <h2 className="text-2xl font-bold mb-4">{product.name}</h2>
+              <h2 className="text-2xl font-bold mb-4 text-[#854836]">{product.name}</h2>
               <p className="text-gray-600 mb-4">{product.description}</p>
               <div className="mb-8">
-                <span className="text-3xl font-bold">${product.price.toLocaleString()}</span>
+                <span className="text-3xl font-bold text-[#854836]">${product.price.toLocaleString()}</span>
               </div>
               <button
                 onClick={handlePayment}
                 disabled={loading}
-                className={`w-full bg-yellow-400 text-gray-900 py-3 rounded-lg font-semibold 
-                  ${loading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-yellow-500'} 
-                  transition duration-300`}
+                className={`w-full bg-[#FFB22C] text-[#F7F7F7] py-3 rounded-lg font-semibold 
+                  ${loading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#854836]'} 
+                  transition-colors duration-300`}
               >
                 {loading ? 'Processing...' : 'Proceed to Payment'}
               </button>
